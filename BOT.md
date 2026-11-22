@@ -11,16 +11,29 @@ aparece una fecha anterior a tu cita actual, la reprograma automáticamente.
 ## Instalación
 
 ```bash
-pip install -r requirements.txt
-cp .env.example .env   # y completa tus datos
-python bot.py
+python -m pip install -r requirements.txt
+python configurar.py    # pide tus datos (la contraseña no se ve) y crea el .env
+python bot.py --once    # una sola consulta, para probar
+python bot.py           # vigila sin parar
 ```
+
+`python -m unittest -v` ejecuta las pruebas sin conexión (simulan el sitio).
 
 ## Cómo usarlo
 
 1. Deja `DRY_RUN=true` la primera vez: el bot solo avisa de las fechas que encuentra.
 2. Cuando veas que inicia sesión y consulta bien, pon `DRY_RUN=false`.
 3. Déjalo corriendo en una computadora encendida. Al reprogramar, avisa y se detiene.
+
+## Protecciones
+
+- Solo reserva fechas anteriores a `CURRENT_APPOINTMENT_DATE` y no anteriores a `MIN_DATE`.
+- Tras enviar una reserva, la confirma por el mensaje del sitio o porque la cuenta ya
+  muestra la fecha nueva. Si no se confirma `MAX_BOOKING_ATTEMPTS` veces (3), se detiene.
+- Al iniciar sesión avisa si la cuenta no muestra una cita en `CURRENT_APPOINTMENT_DATE`.
+- Si la cuenta tiene varias solicitudes, usa la de número más alto (la más reciente).
+- Si el sitio pide captcha al iniciar sesión, el bot se detiene y lo dice; no lo resuelve.
+- Todo queda registrado en `bot.log`.
 
 ## Advertencias
 
