@@ -112,15 +112,21 @@ class VisaClient:
             },
             timeout=30,
         )
-        response.raise_for_status()
         account = self.http.get(f"{NIV}/account", timeout=30)
         if "sign_in" in account.url:
-            sys.exit("No se pudo iniciar sesión: revisa el correo y la contraseña.")
+            detail = re.sub(r"\s+", " ", response.text)[:500]
+            if "captcha" in response.text.lower():
+                detail = "el sitio pide resolver un captcha. " + detail
+            sys.exit(
+                f"No se pudo iniciar sesión (HTTP {response.status_code}). "
+                f"Respuesta del sitio: {detail}"
+            )
         if not self.schedule_id:
-            match = re.search(r"/schedule/(\d+)/", account.text)
-            if not match:
+            # La cuenta puede listar solicitudes antiguas; la vigente es la de número más alto.
+            found = {int(number) for number in re.findall(r"/schedule/(\d+)/", account.text)}
+            if not found:
                 sys.exit("No se encontró el número de solicitud; ponlo en SCHEDULE_ID.")
-            self.schedule_id = match.group(1)
+            self.schedule_id = str(max(found))
         log(f"Sesión iniciada (solicitud {self.schedule_id})")
 
     def _json(self, path):
