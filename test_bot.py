@@ -51,8 +51,12 @@ class Response:
 class FakeSite:
     """Sesión HTTP falsa: responde según la URL y guarda lo que se envió."""
 
-    def __init__(self, days=(), times=("08:15", "09:00"), logged_in=True, book_text="", account=ACCOUNT):
+    def __init__(self, days=(), times=("08:15", "09:00"), logged_in=True, book_text="", account=ACCOUNT,
+                 applies=None):
         self.headers = {}
+        # applies: si el sitio de verdad cambia la cita (por defecto, cuando responde con éxito).
+        self.applies = applies if applies is not None else any(
+            word in book_text for word in ("exitosamente", "successfully"))
         self.days, self.times, self.logged_in = list(days), list(times), logged_in
         self.book_text, self.account = book_text, account
         self.posts = []
@@ -74,7 +78,18 @@ class FakeSite:
         self.posts.append((url, data))
         if url.endswith("/users/sign_in"):
             return Response("captcha requerido" if not self.logged_in else "ok")
+        if self.applies and url.endswith("/appointment"):
+            schedule = url.split("/schedule/")[1].split("/")[0]
+            self.account = account_with(schedule, data["appointments[consulate_appointment][date]"])
         return Response(self.book_text)
+
+
+def account_with(schedule, iso_day):
+    day = date.fromisoformat(iso_day)
+    return (
+        CSRF + f'<a href="/es-pe/niv/schedule/{schedule}/continue_actions">Continuar</a>'
+        + f'<p class="consular-appt">Cita Consular: {day.day} {bot.MONTHS_ES[day.month - 1]}, {day.year}, 08:15 Lima</p>'
+    )
 
 
 def client_for(site):
@@ -194,9 +209,9 @@ class MinGainTest(unittest.TestCase):
 
 class BookingTest(unittest.TestCase):
     def setUp(self):
-        patcher = mock.patch.object(bot, "DRY_RUN", False)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for patcher in (mock.patch.object(bot, "DRY_RUN", False), mock.patch.object(bot.time, "sleep")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_reserva_confirmada_por_mensaje(self):
         site = FakeSite(days=["2027-02-01"], book_text="Ha programado exitosamente su cita")
@@ -211,8 +226,14 @@ class BookingTest(unittest.TestCase):
     def test_reserva_confirmada_por_la_cuenta(self):
         site = FakeSite(days=["2027-02-01"], book_text="redirigido")
         client = client_for(site)
-        site.account = ACCOUNT + "<p>Cita Consular: 1 febrero, 2027, 08:15</p>"
+        site.applies = True
         self.assertEqual(bot.check_once(client)[0], "booked")
+        self.assertEqual(client.current_date, date(2027, 2, 1))
+
+    def test_mensaje_de_exito_sin_cambio_en_la_cuenta_no_cuenta(self):
+        # Pasó de verdad: el sitio dijo "exitosamente" pero la cita siguió igual.
+        site = FakeSite(days=["2027-02-01"], book_text="Ha programado exitosamente su cita", applies=False)
+        self.assertEqual(bot.check_once(client_for(site))[0], "not_booked")
 
     def test_reserva_no_confirmada(self):
         site = FakeSite(days=["2027-02-01"], book_text="El horario ya no está disponible")
@@ -248,11 +269,17 @@ class MainLoopTest(unittest.TestCase):
                 mock.patch.object(bot.time, "sleep") as sleep:
             return bot.main([]), sleep
 
-    def test_se_detiene_al_reservar(self):
+    def test_sigue_buscando_tras_reservar(self):
         site = FakeSite(days=["2027-02-01"], book_text="successfully scheduled")
-        code, sleep = self.run_main(site, dry_run=False)
-        self.assertEqual(code, 0)
-        sleep.assert_not_called()
+
+        class Stop(Exception):
+            pass
+
+        with mock.patch.object(bot, "DRY_RUN", False), mock.patch.object(bot, "notify"),                 mock.patch.object(bot.requests, "Session", return_value=site),                 mock.patch.object(bot.time, "sleep", side_effect=Stop):
+            with self.assertRaises(Stop):  # llegó a la espera: no se detuvo tras reservar
+                bot.main([])
+        bookings = [p for p in site.posts if p[0].endswith("/appointment")]
+        self.assertEqual(len(bookings), 1)
 
     def test_se_detiene_tras_intentos_sin_confirmar(self):
         site = FakeSite(days=["2027-02-01"], book_text="no disponible")
@@ -260,7 +287,6 @@ class MainLoopTest(unittest.TestCase):
         self.assertEqual(code, 2)
         bookings = [p for p in site.posts if p[0].endswith("/appointment")]
         self.assertEqual(len(bookings), 3)
-        self.assertEqual(sleep.call_count, 2)
 
     def test_once_hace_una_sola_consulta(self):
         site = FakeSite(days=["2027-02-01"])

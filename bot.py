@@ -273,14 +273,20 @@ class VisaClient:
             },
             timeout=30,
         )
-        text = response.text.lower()
-        if response.ok and ("exitosamente" in text or "successfully" in text):
-            return True
-        # Segunda comprobación: ¿la cuenta ya muestra la fecha nueva?
-        try:
-            return page_mentions_date(self.account_page(), day)
-        except (requests.RequestException, SessionExpired):
-            return False
+        # El texto de la respuesta no basta: el sitio puede decir "exitosamente" sin haber
+        # cambiado nada. Solo cuenta como reservada si la cuenta muestra la fecha nueva.
+        for attempt in range(3):
+            try:
+                shown = appointment_in_account(self.account_page(), self.schedule_id)
+            except (requests.RequestException, SessionExpired):
+                shown = None
+            if shown == day:
+                self.current_date = day
+                return True
+            if attempt < 2:
+                time.sleep(5)
+        log(f"El sitio respondió HTTP {response.status_code}, pero la cuenta sigue mostrando {shown}.")
+        return False
 
 
 class DailyReport:
@@ -345,7 +351,10 @@ def check_once(client):
     if (real - best).days < max(MIN_GAIN_DAYS, 1):
         return "no_better", f"{best} ya no adelanta lo suficiente tu cita real ({real})."
     if client.book(best, times[0]):
-        return "booked", f"¡Cita reprogramada para el {best} a las {times[0]}! Verifica en la web."
+        return "booked", (
+            f"¡Cita reprogramada para el {best} a las {times[0]}! Ya lo comprobé en tu cuenta. "
+            f"Sigo buscando algo al menos {MIN_GAIN_DAYS} días antes."
+        )
     return "not_booked", f"Intenté reservar el {best} {times[0]} pero el sitio no lo confirmó."
 
 
@@ -388,7 +397,7 @@ def main(argv=None):
                 log(message)
             last_outcome = outcome
             if outcome == "booked":
-                return 0
+                booking_attempts = 0
             if outcome == "not_booked":
                 booking_attempts += 1
                 if booking_attempts >= MAX_BOOKING_ATTEMPTS:
