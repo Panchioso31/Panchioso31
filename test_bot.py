@@ -86,6 +86,11 @@ class PickDateTest(unittest.TestCase):
         dates = [date(2027, 3, 1), date(2026, 11, 30), date(2027, 1, 10), date(2028, 1, 1)]
         self.assertEqual(bot.pick_date(dates, date(2027, 11, 5), date(2026, 12, 1)), date(2027, 1, 10))
 
+    def test_salta_los_dias_excluidos(self):
+        dates = [date(2026, 12, 12), date(2026, 12, 18), date(2026, 12, 19)]
+        excl = bot.parse_ranges("2026-12-12:2026-12-18")
+        self.assertEqual(bot.pick_date(dates, date(2027, 8, 2), date(2026, 11, 23), excl), date(2026, 12, 19))
+
     def test_ignora_la_fecha_actual_y_posteriores(self):
         dates = [date(2027, 11, 5), date(2027, 12, 1)]
         self.assertIsNone(bot.pick_date(dates, date(2027, 11, 5), date(2026, 12, 1)))

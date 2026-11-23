@@ -66,6 +66,19 @@ CHECK_INTERVAL = float(env("CHECK_INTERVAL_SECONDS", "60"))
 BLOCK_COOLDOWN = float(env("BLOCK_COOLDOWN_SECONDS", "1800"))
 MAX_BOOKING_ATTEMPTS = int(env("MAX_BOOKING_ATTEMPTS", "3"))
 DRY_RUN = env("DRY_RUN", "true").lower() in ("1", "true", "yes", "si", "sí")
+def parse_ranges(text):
+    """"2026-12-12:2026-12-18,2027-01-05" -> [(inicio, fin), ...] (días que no puedes ir)."""
+    ranges = []
+    for part in filter(None, (p.strip() for p in (text or "").split(","))):
+        start, _, end = part.partition(":")
+        try:
+            ranges.append((parse_date(start), parse_date(end or start)))
+        except ValueError:
+            sys.exit(f"EXCLUDE_DATES tiene un rango inválido: {part} (usa AAAA-MM-DD:AAAA-MM-DD)")
+    return ranges
+
+
+EXCLUDE = parse_ranges(env("EXCLUDE_DATES", ""))
 TELEGRAM_TOKEN = env("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT = env("TELEGRAM_CHAT_ID", "")
 LOG_FILE = HERE / "bot.log"
@@ -111,9 +124,12 @@ def csrf_token(html):
     return match.group(1)
 
 
-def pick_date(available, current, minimum):
-    """La fecha más próxima que sea anterior a la cita actual y no anterior al mínimo."""
-    candidates = sorted(d for d in available if minimum <= d < current)
+def pick_date(available, current, minimum, exclude=()):
+    """La fecha más próxima anterior a la cita actual, no anterior al mínimo y fuera de los rangos excluidos."""
+    candidates = sorted(
+        d for d in available
+        if minimum <= d < current and not any(a <= d <= b for a, b in exclude)
+    )
     return candidates[0] if candidates else None
 
 
@@ -241,7 +257,7 @@ def check_once(client):
     dates = client.available_dates()
     if not dates:
         return "empty", "Sin fechas disponibles."
-    best = pick_date(dates, CURRENT_DATE, MIN_DATE)
+    best = pick_date(dates, CURRENT_DATE, MIN_DATE, EXCLUDE)
     if best is None:
         return "no_better", f"La más próxima es {min(dates)}; no mejora la cita actual."
     times = client.available_times(best)
@@ -262,6 +278,8 @@ def main(argv=None):
         f"Cita actual: {CURRENT_DATE}. Busco fechas desde {MIN_DATE}. "
         f"Modo {'PRUEBA (no reserva)' if DRY_RUN else 'REAL (reserva automática)'}."
     )
+    for start, end in EXCLUDE:
+        log(f"No reservo entre {start} y {end}.")
     client = VisaClient()
     try:
         client.login()
