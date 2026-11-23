@@ -15,6 +15,8 @@ os.environ.update(
     LOCALE="es-pe",
     CHECK_INTERVAL_SECONDS="60",
     MAX_BOOKING_ATTEMPTS="3",
+    MIN_GAIN_DAYS="0",
+    EXCLUDE_DATES="",
     TELEGRAM_BOT_TOKEN="",
     TELEGRAM_CHAT_ID="",
 )
@@ -173,6 +175,21 @@ class CheckOnceTest(unittest.TestCase):
         site.logged_in = False
         with self.assertRaises(bot.SessionExpired):
             bot.check_once(client)
+
+
+class MinGainTest(unittest.TestCase):
+    def test_no_reserva_si_adelanta_menos_de_30_dias(self):
+        # Cita actual 2027-11-05: el 2027-10-20 adelanta solo 16 días.
+        site = FakeSite(days=["2027-10-20"], book_text="successfully")
+        with mock.patch.object(bot, "DRY_RUN", False), mock.patch.object(bot, "MIN_GAIN_DAYS", 30):
+            self.assertEqual(bot.check_once(client_for(site))[0], "no_better")
+        self.assertFalse(any(url.endswith("/appointment") for url, _ in site.posts))
+
+    def test_reserva_si_adelanta_30_dias_o_mas(self):
+        site = FakeSite(days=["2027-10-06", "2027-10-20"], book_text="successfully")
+        with mock.patch.object(bot, "DRY_RUN", False), mock.patch.object(bot, "MIN_GAIN_DAYS", 30):
+            self.assertEqual(bot.check_once(client_for(site))[0], "booked")
+        self.assertEqual(site.posts[-1][1]["appointments[consulate_appointment][date]"], "2027-10-06")
 
 
 class BookingTest(unittest.TestCase):

@@ -12,7 +12,7 @@ import random
 import re
 import sys
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -65,6 +65,8 @@ MIN_DATE = env_date("MIN_DATE", date.today().isoformat())
 CHECK_INTERVAL = float(env("CHECK_INTERVAL_SECONDS", "60"))
 BLOCK_COOLDOWN = float(env("BLOCK_COOLDOWN_SECONDS", "1800"))
 MAX_BOOKING_ATTEMPTS = int(env("MAX_BOOKING_ATTEMPTS", "3"))
+# Solo reprograma si la fecha nueva adelanta la cita al menos estos días (cuida el límite de cambios).
+MIN_GAIN_DAYS = int(env("MIN_GAIN_DAYS", "30"))
 DRY_RUN = env("DRY_RUN", "true").lower() in ("1", "true", "yes", "si", "sí")
 def parse_ranges(text):
     """"2026-12-12:2026-12-18,2027-01-05" -> [(inicio, fin), ...] (días que no puedes ir)."""
@@ -326,17 +328,22 @@ def check_once(client):
     if not dates:
         return "empty", "Sin fechas disponibles."
     current = getattr(client, "current_date", CURRENT_DATE)
-    best = pick_date(dates, current, MIN_DATE, EXCLUDE)
+    limit = current - timedelta(days=MIN_GAIN_DAYS - 1) if MIN_GAIN_DAYS > 0 else current
+    best = pick_date(dates, limit, MIN_DATE, EXCLUDE)
     if best is None:
-        return "no_better", f"La más próxima es {min(dates)}; no mejora la cita actual."
+        return "no_better", (
+            f"La más próxima es {min(dates)}; no adelanta tu cita ({current}) "
+            f"al menos {MIN_GAIN_DAYS} días."
+        )
     times = client.available_times(best)
     if not times:
         return "no_times", f"{best} apareció pero ya no tiene horarios."
     if DRY_RUN:
         return "found", f"[PRUEBA] Hay cita el {best} a las {times[0]} (no reservada)."
     # Justo antes de reservar, vuelve a leer la cita real (la embajada pudo haberla movido).
-    if best >= client.refresh_current():
-        return "no_better", f"{best} ya no mejora tu cita real ({client.current_date})."
+    real = client.refresh_current()
+    if (real - best).days < max(MIN_GAIN_DAYS, 1):
+        return "no_better", f"{best} ya no adelanta lo suficiente tu cita real ({real})."
     if client.book(best, times[0]):
         return "booked", f"¡Cita reprogramada para el {best} a las {times[0]}! Verifica en la web."
     return "not_booked", f"Intenté reservar el {best} {times[0]} pero el sitio no lo confirmó."
@@ -352,6 +359,8 @@ def main(argv=None):
     )
     for start, end in EXCLUDE:
         log(f"No reservo entre {start} y {end}.")
+    if MIN_GAIN_DAYS > 0:
+        log(f"Solo reprogramo si la fecha nueva adelanta tu cita al menos {MIN_GAIN_DAYS} días.")
     client = VisaClient()
     try:
         client.login()
