@@ -8,6 +8,8 @@ El script detecta tu chat, lo guarda en .env y te manda un mensaje de prueba.
 """
 import getpass
 import re
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -25,15 +27,33 @@ def save(key, value):
     ENV.write_text(text, encoding="utf-8")
 
 
+def clipboard_token():
+    """Lee el token del portapapeles de Windows (después de hacer clic en él en Telegram)."""
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
+            capture_output=True, text=True, timeout=15,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    match = re.search(r"\d{6,}:[A-Za-z0-9_-]{30,}", out)
+    return match.group(0) if match else ""
+
+
 def main():
     print("\n" * 40)
-    print("PEGA EL TOKEN DE TU BOT DE TELEGRAM Y PULSA ENTER (no se verá).")
+    token = clipboard_token() if "--portapapeles" in sys.argv else ""
+    if token:
+        print("Token leído del portapapeles.")
+    else:
+        print("PEGA EL TOKEN DE TU BOT DE TELEGRAM Y PULSA ENTER (no se verá).")
     while True:
-        token = getpass.getpass("Token: ").strip()
+        token = token or getpass.getpass("Token: ").strip()
         me = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=15).json()
         if me.get("ok"):
             break
         print("Ese token no funciona. Cópialo de nuevo desde @BotFather.")
+        token = ""
     name = me["result"]["username"]
     save("TELEGRAM_BOT_TOKEN", token)
     print(f"\nToken correcto. Ahora abre @{name} en Telegram, pulsa Iniciar y envíale 'hola'.")
