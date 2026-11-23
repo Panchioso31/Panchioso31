@@ -106,6 +106,30 @@ class PageDateTest(unittest.TestCase):
         self.assertFalse(bot.page_mentions_date("5 noviembre, 2026", day))
 
 
+REAL_ACCOUNT = (
+    CSRF
+    + '<a href="/es-pe/niv/schedule/80000001/continue_actions">Continuar</a>'
+    + '<p class="consular-appt"><strong>Cita Consular:</strong> 15 enero, 2027, 09:30 Lima</p>'
+    + '<a href="/es-pe/niv/schedule/76627525/continue_actions">Continuar</a>'
+    + '<p class="consular-appt"><strong>Cita Consular:</strong> 5 noviembre, 2026, 07:30 Lima</p>'
+)
+
+
+class RealAppointmentTest(unittest.TestCase):
+    def test_lee_la_cita_de_la_solicitud_correcta(self):
+        self.assertEqual(bot.appointment_in_account(REAL_ACCOUNT, "80000001"), date(2027, 1, 15))
+        self.assertEqual(bot.appointment_in_account(REAL_ACCOUNT, "76627525"), date(2026, 11, 5))
+        self.assertIsNone(bot.appointment_in_account(REAL_ACCOUNT, "99999999"))
+
+    def test_si_la_embajada_adelanto_la_cita_no_reserva_algo_peor(self):
+        # .env dice 2027-11-05, pero la cuenta ya muestra 2027-01-15: 2027-02-01 sería peor.
+        site = FakeSite(days=["2027-02-01"], book_text="successfully", account=REAL_ACCOUNT)
+        with mock.patch.object(bot, "DRY_RUN", False), mock.patch.object(bot, "notify"):
+            outcome, _ = bot.check_once(client_for(site))
+        self.assertEqual(outcome, "no_better")
+        self.assertFalse(any(url.endswith("/appointment") for url, _ in site.posts))
+
+
 class LoginTest(unittest.TestCase):
     def test_elige_la_solicitud_mas_reciente(self):
         self.assertEqual(client_for(FakeSite()).schedule_id, "80000001")

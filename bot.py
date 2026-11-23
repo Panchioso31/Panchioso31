@@ -141,11 +141,31 @@ def page_mentions_date(html, day):
     return re.search(pattern, html, re.IGNORECASE) is not None
 
 
+def appointment_in_account(html, schedule_id):
+    """Fecha de la cita consular que la cuenta muestra para esa solicitud (o None)."""
+    start = html.find(f"/schedule/{schedule_id}/")
+    if start < 0:
+        return None
+    following = re.search(r"/schedule/(?!%s/)\d+/" % re.escape(str(schedule_id)), html[start + 1:])
+    block = html[start: start + 1 + following.start()] if following else html[start:]
+    months = "|".join(MONTHS_ES + MONTHS_EN)
+    match = re.search(
+        rf"consular-appt.*?(\d{{1,2}})\s+(?:de\s+)?({months}),?\s+(?:de\s+)?(\d{{4}})",
+        block, re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return None
+    name = match.group(2).lower()
+    month = (MONTHS_ES.index(name) if name in MONTHS_ES else MONTHS_EN.index(name)) + 1
+    return date(int(match.group(3)), month, int(match.group(1)))
+
+
 class VisaClient:
     def __init__(self, http=None):
         self.http = http or requests.Session()
         self.http.headers["User-Agent"] = USER_AGENT
         self.schedule_id = SCHEDULE_ID
+        self.current_date = CURRENT_DATE
 
     @property
     def appointment_url(self):
@@ -185,11 +205,19 @@ class VisaClient:
                 raise LoginError("No se encontró el número de solicitud; ponlo en SCHEDULE_ID.")
             self.schedule_id = str(max(found))
         log(f"Sesión iniciada (solicitud {self.schedule_id})")
-        if not page_mentions_date(account, CURRENT_DATE):
-            log(
-                f"AVISO: la cuenta no muestra una cita el {CURRENT_DATE}. "
-                "Revisa CURRENT_APPOINTMENT_DATE antes de usar el modo real."
-            )
+        self.refresh_current(account)
+
+    def refresh_current(self, account=None):
+        """Lee de la cuenta la fecha real de tu cita; si no se puede, usa CURRENT_APPOINTMENT_DATE."""
+        account = account if account is not None else self.account_page()
+        real = appointment_in_account(account, self.schedule_id)
+        previous = self.current_date
+        self.current_date = real or CURRENT_DATE
+        if real is None:
+            log(f"AVISO: no pude leer tu cita en la cuenta; uso {CURRENT_DATE} del .env.")
+        elif real != previous:
+            notify(f"Tu cita en la cuenta es el {real}. Desde ahora solo busco fechas anteriores a esa.")
+        return self.current_date
 
     def account_page(self, allow_expired=False):
         response = self.http.get(f"{NIV}/account", timeout=30)
@@ -258,6 +286,7 @@ class DailyReport:
 
     def __init__(self, now=None):
         now = now or datetime.now()
+        self.current = CURRENT_DATE
         self.reset()
         # Si ya pasó la hora del reporte hoy, el primero sale mañana.
         self.last_sent = now.date() if now.hour >= REPORT_HOUR else None
@@ -277,7 +306,7 @@ class DailyReport:
         best = f"la fecha más próxima vista fue {self.earliest}" if self.earliest else "no se vieron fechas"
         return (
             f"Reporte del {now:%d/%m/%Y}: {self.checks} consultas, {self.errors} errores; {best}. "
-            f"Tu cita sigue el {CURRENT_DATE}. El bot sigue buscando desde {MIN_DATE}."
+            f"Tu cita está el {self.current}. El bot sigue buscando desde {MIN_DATE}."
         )
 
     def maybe_send(self, now=None):
@@ -296,7 +325,8 @@ def check_once(client):
     client.last_earliest = min(dates) if dates else None
     if not dates:
         return "empty", "Sin fechas disponibles."
-    best = pick_date(dates, CURRENT_DATE, MIN_DATE, EXCLUDE)
+    current = getattr(client, "current_date", CURRENT_DATE)
+    best = pick_date(dates, current, MIN_DATE, EXCLUDE)
     if best is None:
         return "no_better", f"La más próxima es {min(dates)}; no mejora la cita actual."
     times = client.available_times(best)
@@ -304,6 +334,9 @@ def check_once(client):
         return "no_times", f"{best} apareció pero ya no tiene horarios."
     if DRY_RUN:
         return "found", f"[PRUEBA] Hay cita el {best} a las {times[0]} (no reservada)."
+    # Justo antes de reservar, vuelve a leer la cita real (la embajada pudo haberla movido).
+    if best >= client.refresh_current():
+        return "no_better", f"{best} ya no mejora tu cita real ({client.current_date})."
     if client.book(best, times[0]):
         return "booked", f"¡Cita reprogramada para el {best} a las {times[0]}! Verifica en la web."
     return "not_booked", f"Intenté reservar el {best} {times[0]} pero el sitio no lo confirmó."
@@ -328,7 +361,7 @@ def main(argv=None):
     if not once:
         notify(
             f"Bot de citas iniciado en modo {'PRUEBA' if DRY_RUN else 'REAL'}. "
-            f"Cita actual: {CURRENT_DATE}. Te mando un reporte cada día a las {REPORT_HOUR}:00."
+            f"Cita actual: {client.current_date}. Te mando un reporte cada día a las {REPORT_HOUR}:00."
         )
     report = DailyReport()
     booking_attempts = 0
@@ -379,6 +412,7 @@ def main(argv=None):
             report.record(error=True)
         if once:
             return 0
+        report.current = client.current_date
         report.maybe_send()
         time.sleep(wait)
 
