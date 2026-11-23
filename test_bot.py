@@ -178,6 +178,28 @@ class BookingTest(unittest.TestCase):
         self.assertEqual(bot.check_once(client_for(site))[0], "not_booked")
 
 
+class DailyReportTest(unittest.TestCase):
+    def test_envia_una_vez_al_dia_a_la_hora(self):
+        from datetime import datetime
+        with mock.patch.object(bot, "REPORT_HOUR", 21), mock.patch.object(bot, "notify") as notify:
+            report = bot.DailyReport(now=datetime(2026, 11, 23, 10, 0))
+            report.record(date(2027, 8, 2))
+            report.record(date(2027, 3, 1))
+            report.record(error=True)
+            self.assertFalse(report.maybe_send(datetime(2026, 11, 23, 20, 59)))
+            self.assertTrue(report.maybe_send(datetime(2026, 11, 23, 21, 0)))
+            self.assertIn("3 consultas, 1 errores", notify.call_args[0][0])
+            self.assertIn("2027-03-01", notify.call_args[0][0])
+            self.assertFalse(report.maybe_send(datetime(2026, 11, 23, 23, 0)))
+            self.assertTrue(report.maybe_send(datetime(2026, 11, 24, 21, 5)))
+
+    def test_si_arranca_tarde_espera_al_dia_siguiente(self):
+        from datetime import datetime
+        with mock.patch.object(bot, "REPORT_HOUR", 21), mock.patch.object(bot, "notify"):
+            report = bot.DailyReport(now=datetime(2026, 11, 23, 22, 0))
+            self.assertFalse(report.maybe_send(datetime(2026, 11, 23, 23, 0)))
+
+
 class MainLoopTest(unittest.TestCase):
     def run_main(self, site, dry_run=True):
         with mock.patch.object(bot, "DRY_RUN", dry_run), \

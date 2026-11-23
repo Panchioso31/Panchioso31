@@ -81,6 +81,7 @@ def parse_ranges(text):
 EXCLUDE = parse_ranges(env("EXCLUDE_DATES", ""))
 TELEGRAM_TOKEN = env("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT = env("TELEGRAM_CHAT_ID", "")
+REPORT_HOUR = int(env("REPORT_HOUR", "21"))  # hora del reporte diario (0-23)
 LOG_FILE = HERE / "bot.log"
 
 NIV = f"{BASE}/{LOCALE}/niv"
@@ -252,9 +253,47 @@ class VisaClient:
             return False
 
 
+class DailyReport:
+    """Junta lo que pasó en el día y lo envía una vez al día a la hora REPORT_HOUR."""
+
+    def __init__(self, now=None):
+        now = now or datetime.now()
+        self.reset()
+        # Si ya pasó la hora del reporte hoy, el primero sale mañana.
+        self.last_sent = now.date() if now.hour >= REPORT_HOUR else None
+
+    def reset(self):
+        self.checks = 0
+        self.errors = 0
+        self.earliest = None
+
+    def record(self, earliest=None, error=False):
+        self.checks += 1
+        self.errors += int(error)
+        if earliest and (self.earliest is None or earliest < self.earliest):
+            self.earliest = earliest
+
+    def message(self, now):
+        best = f"la fecha más próxima vista fue {self.earliest}" if self.earliest else "no se vieron fechas"
+        return (
+            f"Reporte del {now:%d/%m/%Y}: {self.checks} consultas, {self.errors} errores; {best}. "
+            f"Tu cita sigue el {CURRENT_DATE}. El bot sigue buscando desde {MIN_DATE}."
+        )
+
+    def maybe_send(self, now=None):
+        now = now or datetime.now()
+        if now.hour >= REPORT_HOUR and self.last_sent != now.date():
+            notify(self.message(now))
+            self.last_sent = now.date()
+            self.reset()
+            return True
+        return False
+
+
 def check_once(client):
     """Una consulta. Devuelve: empty, no_better, no_times, found, booked o not_booked."""
     dates = client.available_dates()
+    client.last_earliest = min(dates) if dates else None
     if not dates:
         return "empty", "Sin fechas disponibles."
     best = pick_date(dates, CURRENT_DATE, MIN_DATE, EXCLUDE)
@@ -286,6 +325,12 @@ def main(argv=None):
     except (LoginError, requests.RequestException, RuntimeError) as error:
         sys.exit(str(error))
 
+    if not once:
+        notify(
+            f"Bot de citas iniciado en modo {'PRUEBA' if DRY_RUN else 'REAL'}. "
+            f"Cita actual: {CURRENT_DATE}. Te mando un reporte cada día a las {REPORT_HOUR}:00."
+        )
+    report = DailyReport()
     booking_attempts = 0
     relogins = 0
     last_outcome = None
@@ -293,6 +338,7 @@ def main(argv=None):
         wait = CHECK_INTERVAL * random.uniform(0.8, 1.2)
         try:
             outcome, message = check_once(client)
+            report.record(getattr(client, "last_earliest", None))
             relogins = 0
             if outcome in ("found", "booked", "not_booked"):
                 notify(message)
@@ -326,11 +372,14 @@ def main(argv=None):
         except requests.HTTPError as error:
             status = error.response.status_code if error.response is not None else "?"
             log(f"Error HTTP {status}; posible bloqueo. Espero {BLOCK_COOLDOWN:.0f}s.")
+            report.record(error=True)
             wait = BLOCK_COOLDOWN
         except (requests.RequestException, ValueError, KeyError, RuntimeError) as error:
             log(f"Error temporal: {error}")
+            report.record(error=True)
         if once:
             return 0
+        report.maybe_send()
         time.sleep(wait)
 
 
