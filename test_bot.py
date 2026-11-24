@@ -235,6 +235,15 @@ class BookingTest(unittest.TestCase):
         site = FakeSite(days=["2027-02-01"], book_text="Ha programado exitosamente su cita", applies=False)
         self.assertEqual(bot.check_once(client_for(site))[0], "not_booked")
 
+    def test_ignora_horas_nulas(self):
+        # Pasó de verdad: available_times = [None] para el 2027-01-08.
+        site = FakeSite(days=["2027-02-01"], times=[None], book_text="successfully")
+        self.assertEqual(bot.check_once(client_for(site))[0], "no_times")
+        self.assertFalse(any(url.endswith("/appointment") for url, _ in site.posts))
+        site = FakeSite(days=["2027-02-01"], times=[None, "09:00"], book_text="successfully")
+        self.assertEqual(bot.check_once(client_for(site))[0], "booked")
+        self.assertEqual(site.posts[-1][1]["appointments[consulate_appointment][time]"], "09:00")
+
     def test_reserva_no_confirmada(self):
         site = FakeSite(days=["2027-02-01"], book_text="El horario ya no está disponible")
         self.assertEqual(bot.check_once(client_for(site))[0], "not_booked")

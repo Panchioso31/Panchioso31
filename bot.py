@@ -253,7 +253,12 @@ class VisaClient:
         data = self._json(
             f"times/{FACILITY_ID}.json?date={day.isoformat()}&appointments[expedite]=false"
         )
-        return data.get("available_times") or data.get("business_times") or []
+        # El sitio a veces devuelve [null] en available_times; solo sirven horas reales ("08:15").
+        for key in ("available_times", "business_times"):
+            valid = [t for t in (data.get(key) or []) if isinstance(t, str) and re.match(r"^\d{1,2}:\d{2}$", t)]
+            if valid:
+                return valid
+        return []
 
     def book(self, day, hour):
         """Envía la reprogramación. Devuelve True solo si el sitio la confirma."""
