@@ -143,6 +143,16 @@ def page_mentions_date(html, day):
     return re.search(pattern, html, re.IGNORECASE) is not None
 
 
+def site_message(page):
+    """Texto de los avisos/errores de la página (flash, alertas), para saber por qué falló."""
+    parts = re.findall(
+        r'<(?:div|p|span|li|small)[^>]*class="[^"]*(?:alert|error|notice|flash|callout|warning)[^"]*"[^>]*>(.*?)</(?:div|p|span|li|small)>',
+        page, re.S | re.I)
+    text = " | ".join(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", p)).strip() for p in parts)
+    text = text.strip(" |") or re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", page))[:300]
+    return text[:500]
+
+
 def appointment_in_account(html, schedule_id):
     """Fecha de la cita consular que la cuenta muestra para esa solicitud (o None)."""
     start = html.find(f"/schedule/{schedule_id}/")
@@ -291,6 +301,7 @@ class VisaClient:
             if attempt < 2:
                 time.sleep(5)
         log(f"El sitio respondió HTTP {response.status_code}, pero la cuenta sigue mostrando {shown}.")
+        log(f"Mensaje del sitio: {site_message(response.text)}")
         return False
 
 
@@ -340,7 +351,13 @@ def check_once(client):
         return "empty", "Sin fechas disponibles."
     current = getattr(client, "current_date", CURRENT_DATE)
     limit = current - timedelta(days=MIN_GAIN_DAYS - 1) if MIN_GAIN_DAYS > 0 else current
-    best = pick_date(dates, limit, MIN_DATE, EXCLUDE)
+    # Fechas que fallaron hace poco: se saltan una hora para probar otras.
+    failed = getattr(client, "failed", None)
+    if failed is None:
+        failed = client.failed = {}
+    now = datetime.now()
+    skip = [(d, d) for d, until in failed.items() if until > now]
+    best = pick_date(dates, limit, MIN_DATE, list(EXCLUDE) + skip)
     if best is None:
         return "no_better", (
             f"La más próxima es {min(dates)}; no adelanta tu cita ({current}) "
@@ -360,7 +377,11 @@ def check_once(client):
             f"¡Cita reprogramada para el {best} a las {times[0]}! Ya lo comprobé en tu cuenta. "
             f"Sigo buscando algo al menos {MIN_GAIN_DAYS} días antes."
         )
-    return "not_booked", f"Intenté reservar el {best} {times[0]} pero el sitio no lo confirmó."
+    failed[best] = now + timedelta(hours=1)
+    return "not_booked", (
+        f"Intenté reservar el {best} {times[0]} pero el sitio no lo confirmó. "
+        "Salto esa fecha una hora y sigo buscando."
+    )
 
 
 def main(argv=None):
@@ -406,11 +427,12 @@ def main(argv=None):
             if outcome == "not_booked":
                 booking_attempts += 1
                 if booking_attempts >= MAX_BOOKING_ATTEMPTS:
-                    notify(
-                        f"Me detengo tras {booking_attempts} intentos de reserva sin confirmar. "
-                        "Revisa tu cita en la web antes de volver a iniciarme."
-                    )
-                    return 2
+                    # No se apaga: espera un rato por si el sitio está rechazando todo.
+                    log(f"{booking_attempts} intentos seguidos sin confirmar; espero {BLOCK_COOLDOWN:.0f}s.")
+                    booking_attempts = 0
+                    wait = BLOCK_COOLDOWN
+            elif outcome != "no_times":
+                booking_attempts = 0
         except SessionExpired:
             relogins += 1
             log("Sesión expirada; inicio sesión de nuevo.")

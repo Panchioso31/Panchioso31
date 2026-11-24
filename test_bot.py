@@ -244,6 +244,14 @@ class BookingTest(unittest.TestCase):
         self.assertEqual(bot.check_once(client_for(site))[0], "booked")
         self.assertEqual(site.posts[-1][1]["appointments[consulate_appointment][time]"], "09:00")
 
+    def test_salta_una_hora_la_fecha_que_fallo(self):
+        site = FakeSite(days=["2027-01-08", "2027-02-01"], book_text="no disponible")
+        client = client_for(site)
+        self.assertEqual(bot.check_once(client)[0], "not_booked")
+        site.applies = True
+        self.assertEqual(bot.check_once(client)[0], "booked")
+        self.assertEqual(site.posts[-1][1]["appointments[consulate_appointment][date]"], "2027-02-01")
+
     def test_reserva_no_confirmada(self):
         site = FakeSite(days=["2027-02-01"], book_text="El horario ya no está disponible")
         self.assertEqual(bot.check_once(client_for(site))[0], "not_booked")
@@ -290,12 +298,17 @@ class MainLoopTest(unittest.TestCase):
         bookings = [p for p in site.posts if p[0].endswith("/appointment")]
         self.assertEqual(len(bookings), 1)
 
-    def test_se_detiene_tras_intentos_sin_confirmar(self):
+    def test_no_se_apaga_si_una_reserva_falla(self):
         site = FakeSite(days=["2027-02-01"], book_text="no disponible")
-        code, sleep = self.run_main(site, dry_run=False)
-        self.assertEqual(code, 2)
+
+        class Stop(Exception):
+            pass
+
+        with mock.patch.object(bot, "DRY_RUN", False), mock.patch.object(bot, "notify"),                 mock.patch.object(bot.requests, "Session", return_value=site),                 mock.patch.object(bot.time, "sleep", side_effect=[None, None, Stop]):
+            with self.assertRaises(Stop):
+                bot.main([])
         bookings = [p for p in site.posts if p[0].endswith("/appointment")]
-        self.assertEqual(len(bookings), 3)
+        self.assertEqual(len(bookings), 1)  # la fecha fallida se salta en las vueltas siguientes
 
     def test_once_hace_una_sola_consulta(self):
         site = FakeSite(days=["2027-02-01"])
