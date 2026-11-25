@@ -84,6 +84,7 @@ EXCLUDE = parse_ranges(env("EXCLUDE_DATES", ""))
 TELEGRAM_TOKEN = env("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT = env("TELEGRAM_CHAT_ID", "")
 REPORT_HOUR = int(env("REPORT_HOUR", "21"))  # hora del reporte diario (0-23)
+REPORT_HOURLY = env("REPORT_HOURLY", "false").lower() == "true"  # true: un reporte al empezar cada hora
 LOG_FILE = HERE / "bot.log"
 
 NIV = f"{BASE}/{LOCALE}/niv"
@@ -312,8 +313,16 @@ class DailyReport:
         now = now or datetime.now()
         self.current = CURRENT_DATE
         self.reset()
-        # Si ya pasó la hora del reporte hoy, el primero sale mañana.
-        self.last_sent = now.date() if now.hour >= REPORT_HOUR else None
+        if REPORT_HOURLY:
+            # El primero sale al empezar la próxima hora.
+            self.last_sent = self.slot(now)
+        else:
+            # Si ya pasó la hora del reporte hoy, el primero sale mañana.
+            self.last_sent = now.date() if now.hour >= REPORT_HOUR else None
+
+    @staticmethod
+    def slot(now):
+        return (now.date(), now.hour)
 
     def reset(self):
         self.checks = 0
@@ -328,16 +337,22 @@ class DailyReport:
 
     def message(self, now):
         best = f"la fecha más próxima vista fue {self.earliest}" if self.earliest else "no se vieron fechas"
+        when = f"{now:%d/%m/%Y %H}:00" if REPORT_HOURLY else f"{now:%d/%m/%Y}"
+        since = f" desde {MIN_DATE}" if MIN_DATE else ""
         return (
-            f"Reporte del {now:%d/%m/%Y}: {self.checks} consultas, {self.errors} errores; {best}. "
-            f"Tu cita está el {self.current}. El bot sigue buscando desde {MIN_DATE}."
+            f"Reporte del {when}: {self.checks} consultas, {self.errors} errores; {best}. "
+            f"Tu cita está el {self.current}. El bot sigue buscando{since}."
         )
 
     def maybe_send(self, now=None):
         now = now or datetime.now()
-        if now.hour >= REPORT_HOUR and self.last_sent != now.date():
+        if REPORT_HOURLY:
+            due, key = self.last_sent != self.slot(now), self.slot(now)
+        else:
+            due, key = now.hour >= REPORT_HOUR and self.last_sent != now.date(), now.date()
+        if due:
             notify(self.message(now))
-            self.last_sent = now.date()
+            self.last_sent = key
             self.reset()
             return True
         return False
@@ -405,7 +420,8 @@ def main(argv=None):
     if not once:
         notify(
             f"Bot de citas iniciado en modo {'PRUEBA' if DRY_RUN else 'REAL'}. "
-            f"Cita actual: {client.current_date}. Te mando un reporte cada día a las {REPORT_HOUR}:00."
+            f"Cita actual: {client.current_date}. "
+            + ("Te mando un reporte cada hora." if REPORT_HOURLY else f"Te mando un reporte cada día a las {REPORT_HOUR}:00.")
         )
     report = DailyReport()
     booking_attempts = 0

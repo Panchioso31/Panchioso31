@@ -278,6 +278,19 @@ class DailyReportTest(unittest.TestCase):
             report = bot.DailyReport(now=datetime(2026, 11, 23, 22, 0))
             self.assertFalse(report.maybe_send(datetime(2026, 11, 23, 23, 0)))
 
+    def test_reporte_cada_hora(self):
+        from datetime import datetime
+        with mock.patch.object(bot, "REPORT_HOURLY", True), mock.patch.object(bot, "notify") as notify:
+            report = bot.DailyReport(now=datetime(2026, 11, 23, 10, 15))
+            report.record(date(2027, 8, 2))
+            self.assertFalse(report.maybe_send(datetime(2026, 11, 23, 10, 59)))
+            self.assertTrue(report.maybe_send(datetime(2026, 11, 23, 11, 0)))
+            self.assertIn("23/11/2026 11:00", notify.call_args[0][0])
+            self.assertIn("1 consultas", notify.call_args[0][0])
+            self.assertFalse(report.maybe_send(datetime(2026, 11, 23, 11, 30)))
+            self.assertTrue(report.maybe_send(datetime(2026, 11, 23, 12, 1)))
+            self.assertIn("0 consultas", notify.call_args[0][0])
+
 
 class MainLoopTest(unittest.TestCase):
     def run_main(self, site, dry_run=True):
