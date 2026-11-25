@@ -84,6 +84,7 @@ EXCLUDE = parse_ranges(env("EXCLUDE_DATES", ""))
 TELEGRAM_TOKEN = env("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT = env("TELEGRAM_CHAT_ID", "")
 REPORT_HOUR = int(env("REPORT_HOUR", "21"))  # hora del reporte diario (0-23)
+REPORT_TOP_DATES = int(env("REPORT_TOP_DATES", "5"))  # cuántas fechas próximas lista el reporte
 REPORT_HOURLY = env("REPORT_HOURLY", "false").lower() == "true"  # true: un reporte al empezar cada hora
 LOG_FILE = HERE / "bot.log"
 
@@ -328,15 +329,25 @@ class DailyReport:
         self.checks = 0
         self.errors = 0
         self.earliest = None
+        self.seen = set()
 
-    def record(self, earliest=None, error=False):
+    def record(self, earliest=None, error=False, dates=None):
         self.checks += 1
         self.errors += int(error)
         if earliest and (self.earliest is None or earliest < self.earliest):
             self.earliest = earliest
+        self.seen.update(dates or [])
+        if earliest:
+            self.seen.add(earliest)
 
     def message(self, now):
-        best = f"la fecha más próxima vista fue {self.earliest}" if self.earliest else "no se vieron fechas"
+        top = sorted(self.seen)[:REPORT_TOP_DATES]
+        if len(top) > 1:
+            best = "las fechas más próximas vistas fueron " + ", ".join(str(d) for d in top)
+        elif self.earliest:
+            best = f"la fecha más próxima vista fue {self.earliest}"
+        else:
+            best = "no se vieron fechas"
         when = f"{now:%d/%m/%Y %H}:00" if REPORT_HOURLY else f"{now:%d/%m/%Y}"
         since = f" desde {MIN_DATE}" if MIN_DATE else ""
         return (
@@ -362,6 +373,7 @@ def check_once(client):
     """Una consulta. Devuelve: empty, no_better, no_times, found, booked o not_booked."""
     dates = client.available_dates()
     client.last_earliest = min(dates) if dates else None
+    client.last_dates = sorted(dates)[:REPORT_TOP_DATES]
     if not dates:
         return "empty", "Sin fechas disponibles."
     current = getattr(client, "current_date", CURRENT_DATE)
@@ -431,7 +443,7 @@ def main(argv=None):
         wait = CHECK_INTERVAL * random.uniform(0.8, 1.2)
         try:
             outcome, message = check_once(client)
-            report.record(getattr(client, "last_earliest", None))
+            report.record(getattr(client, "last_earliest", None), dates=getattr(client, "last_dates", None))
             relogins = 0
             if outcome in ("found", "booked", "not_booked"):
                 notify(message)

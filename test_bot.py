@@ -1,4 +1,4 @@
-"""Pruebas sin conexión: simulan las respuestas del sitio. Uso: python -m unittest -v"""
+﻿"""Pruebas sin conexiÃ³n: simulan las respuestas del sitio. Uso: python -m unittest -v"""
 import os
 import unittest
 from datetime import date
@@ -49,12 +49,12 @@ class Response:
 
 
 class FakeSite:
-    """Sesión HTTP falsa: responde según la URL y guarda lo que se envió."""
+    """SesiÃ³n HTTP falsa: responde segÃºn la URL y guarda lo que se enviÃ³."""
 
     def __init__(self, days=(), times=("08:15", "09:00"), logged_in=True, book_text="", account=ACCOUNT,
                  applies=None):
         self.headers = {}
-        # applies: si el sitio de verdad cambia la cita (por defecto, cuando responde con éxito).
+        # applies: si el sitio de verdad cambia la cita (por defecto, cuando responde con Ã©xito).
         self.applies = applies if applies is not None else any(
             word in book_text for word in ("exitosamente", "successfully"))
         self.days, self.times, self.logged_in = list(days), list(times), logged_in
@@ -139,7 +139,7 @@ class RealAppointmentTest(unittest.TestCase):
         self.assertIsNone(bot.appointment_in_account(REAL_ACCOUNT, "99999999"))
 
     def test_si_la_embajada_adelanto_la_cita_no_reserva_algo_peor(self):
-        # .env dice 2027-11-05, pero la cuenta ya muestra 2027-01-15: 2027-02-01 sería peor.
+        # .env dice 2027-11-05, pero la cuenta ya muestra 2027-01-15: 2027-02-01 serÃ­a peor.
         site = FakeSite(days=["2027-02-01"], book_text="successfully", account=REAL_ACCOUNT)
         with mock.patch.object(bot, "DRY_RUN", False), mock.patch.object(bot, "notify"):
             outcome, _ = bot.check_once(client_for(site))
@@ -182,7 +182,7 @@ class CheckOnceTest(unittest.TestCase):
         outcome, message = bot.check_once(client)
         self.assertEqual(outcome, "found")
         self.assertIn("2027-02-01", message)
-        self.assertEqual(len(site.posts), 1)  # solo el inicio de sesión
+        self.assertEqual(len(site.posts), 1)  # solo el inicio de sesiÃ³n
 
     def test_sesion_expirada(self):
         site = FakeSite(days=["2027-02-01"])
@@ -194,7 +194,7 @@ class CheckOnceTest(unittest.TestCase):
 
 class MinGainTest(unittest.TestCase):
     def test_no_reserva_si_adelanta_menos_de_30_dias(self):
-        # Cita actual 2027-11-05: el 2027-10-20 adelanta solo 16 días.
+        # Cita actual 2027-11-05: el 2027-10-20 adelanta solo 16 dÃ­as.
         site = FakeSite(days=["2027-10-20"], book_text="successfully")
         with mock.patch.object(bot, "DRY_RUN", False), mock.patch.object(bot, "MIN_GAIN_DAYS", 30):
             self.assertEqual(bot.check_once(client_for(site))[0], "no_better")
@@ -231,12 +231,12 @@ class BookingTest(unittest.TestCase):
         self.assertEqual(client.current_date, date(2027, 2, 1))
 
     def test_mensaje_de_exito_sin_cambio_en_la_cuenta_no_cuenta(self):
-        # Pasó de verdad: el sitio dijo "exitosamente" pero la cita siguió igual.
+        # PasÃ³ de verdad: el sitio dijo "exitosamente" pero la cita siguiÃ³ igual.
         site = FakeSite(days=["2027-02-01"], book_text="Ha programado exitosamente su cita", applies=False)
         self.assertEqual(bot.check_once(client_for(site))[0], "not_booked")
 
     def test_ignora_horas_nulas(self):
-        # Pasó de verdad: available_times = [None] para el 2027-01-08.
+        # PasÃ³ de verdad: available_times = [None] para el 2027-01-08.
         site = FakeSite(days=["2027-02-01"], times=[None], book_text="successfully")
         self.assertEqual(bot.check_once(client_for(site))[0], "no_times")
         self.assertFalse(any(url.endswith("/appointment") for url, _ in site.posts))
@@ -253,14 +253,14 @@ class BookingTest(unittest.TestCase):
         self.assertEqual(site.posts[-1][1]["appointments[consulate_appointment][date]"], "2027-02-01")
 
     def test_reserva_no_confirmada(self):
-        site = FakeSite(days=["2027-02-01"], book_text="El horario ya no está disponible")
+        site = FakeSite(days=["2027-02-01"], book_text="El horario ya no estÃ¡ disponible")
         self.assertEqual(bot.check_once(client_for(site))[0], "not_booked")
 
 
 class DailyReportTest(unittest.TestCase):
     def test_envia_una_vez_al_dia_a_la_hora(self):
         from datetime import datetime
-        with mock.patch.object(bot, "REPORT_HOUR", 21), mock.patch.object(bot, "notify") as notify:
+        with mock.patch.object(bot, "REPORT_HOUR", 21), mock.patch.object(bot, "REPORT_HOURLY", False), mock.patch.object(bot, "notify") as notify:
             report = bot.DailyReport(now=datetime(2026, 11, 23, 10, 0))
             report.record(date(2027, 8, 2))
             report.record(date(2027, 3, 1))
@@ -274,9 +274,20 @@ class DailyReportTest(unittest.TestCase):
 
     def test_si_arranca_tarde_espera_al_dia_siguiente(self):
         from datetime import datetime
-        with mock.patch.object(bot, "REPORT_HOUR", 21), mock.patch.object(bot, "notify"):
+        with mock.patch.object(bot, "REPORT_HOUR", 21), mock.patch.object(bot, "REPORT_HOURLY", False), mock.patch.object(bot, "notify"):
             report = bot.DailyReport(now=datetime(2026, 11, 23, 22, 0))
             self.assertFalse(report.maybe_send(datetime(2026, 11, 23, 23, 0)))
+
+    def test_reporte_lista_fechas_mas_proximas(self):
+        from datetime import datetime
+        with mock.patch.object(bot, "REPORT_HOUR", 21), mock.patch.object(bot, "REPORT_HOURLY", False), \
+                mock.patch.object(bot, "REPORT_TOP_DATES", 3), mock.patch.object(bot, "notify") as notify:
+            report = bot.DailyReport(now=datetime(2026, 11, 23, 10, 0))
+            report.record(date(2027, 8, 2), dates=[date(2027, 8, 2), date(2027, 9, 1)])
+            report.record(date(2027, 7, 15), dates=[date(2027, 7, 15), date(2027, 8, 2), date(2027, 10, 1)])
+            self.assertTrue(report.maybe_send(datetime(2026, 11, 23, 21, 0)))
+            self.assertIn("2027-07-15, 2027-08-02, 2027-09-01", notify.call_args[0][0])
+            self.assertNotIn("2027-10-01", notify.call_args[0][0])
 
     def test_reporte_cada_hora(self):
         from datetime import datetime
@@ -306,7 +317,7 @@ class MainLoopTest(unittest.TestCase):
             pass
 
         with mock.patch.object(bot, "DRY_RUN", False), mock.patch.object(bot, "notify"),                 mock.patch.object(bot.requests, "Session", return_value=site),                 mock.patch.object(bot.time, "sleep", side_effect=Stop):
-            with self.assertRaises(Stop):  # llegó a la espera: no se detuvo tras reservar
+            with self.assertRaises(Stop):  # llegÃ³ a la espera: no se detuvo tras reservar
                 bot.main([])
         bookings = [p for p in site.posts if p[0].endswith("/appointment")]
         self.assertEqual(len(bookings), 1)
